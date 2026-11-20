@@ -82,6 +82,8 @@ router.post('/login', loginLimiter ,async (req, res, next) => {
  * servidor, así que con la cookie robada se puede seguir usando.
  */
 router.post('/logout', (req, res) => {
+
+  destruirSesion(req);
   res.clearCookie('sid', { path: '/' });
   res.json({ mensaje: 'Sesión cerrada.' });
 });
