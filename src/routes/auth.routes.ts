@@ -51,6 +51,8 @@ router.post('/login', loginLimiter ,async (req, res, next) => {
         .status(401)
         .json({ error: `El usuario "${username}" no existe en el sistema.` });
     }
+    destruirSesion(req);
+
 
     crearSesion(req, res, {
       id: usuario.id,
