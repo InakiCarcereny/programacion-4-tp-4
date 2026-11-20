@@ -1,6 +1,6 @@
 import * as db from '../db';
 import { calcularPrecio } from '../catalogo';
-import type { Pedido, PedidoConItems, PedidoItem, Producto } from '../tipos';
+import type { ErrorHttp, Pedido, PedidoConItems, PedidoItem, Producto } from '../tipos';
 
 /** Un renglón del pedido, tal como llega en el cuerpo de la petición. */
 export interface ItemPedido {
@@ -18,38 +18,73 @@ export interface NuevoPedido {
 /** Id tal como llega en la URL (texto) o ya convertido. */
 type Id = number | string;
 
-/**
- * Servicio de pedidos.
- *
- * -----------------------------------------------------------------------------
- * FALLA — Validación de entrada débil o insuficiente (OWASP A04:2021)
- * -----------------------------------------------------------------------------
- * No se valida nada de lo que llega en el cuerpo de la petición:
- *  - `cantidad` puede ser negativa (el total del pedido queda negativo),
- *    cero, un número decimal o un texto.
- *  - No hay un máximo de items ni de cantidad (DoS / facturas absurdas).
- *  - `mesa` y `cliente` no se validan ni se acotan en longitud.
- *  - Si el productoId no existe, la excepción sube y se filtra el stack.
- *
- * La corrección es validar TIPO (entero), RANGO (1..N), LONGITUD y FORMATO
- * de cada campo en el servidor, usando listas blancas.
- * -----------------------------------------------------------------------------
- */
+const MAX_ITEMS_PEDIDO = 50;
+const MAX_CANTIDAD_ITEM = 100;
+const MAX_LARGO_MESA = 20;
+const MAX_LARGO_CLIENTE = 100;
+
+function errorValidacion(mensaje: string): ErrorHttp {
+  const err: ErrorHttp = new Error(mensaje);
+  err.status = 400;
+  return err;
+}
+
+function validarPedido({ mesa, cliente, items }: NuevoPedido): {
+  mesaLimpia: string;
+  clienteLimpio: string;
+} {
+  if (typeof mesa !== 'string' || mesa.trim().length === 0 || mesa.trim().length > MAX_LARGO_MESA) {
+    throw errorValidacion('La mesa es obligatoria y debe tener como máximo 20 caracteres.');
+  }
+
+  if (
+    typeof cliente !== 'string' ||
+    cliente.trim().length === 0 ||
+    cliente.trim().length > MAX_LARGO_CLIENTE
+  ) {
+    throw errorValidacion('El nombre del cliente es obligatorio y debe tener como máximo 100 caracteres.');
+  }
+
+  if (!Array.isArray(items) || items.length === 0 || items.length > MAX_ITEMS_PEDIDO) {
+    throw errorValidacion('El pedido debe tener entre 1 y 50 items.');
+  }
+
+  for (const item of items) {
+    if (!item || typeof item !== 'object') {
+      throw errorValidacion('Cada item del pedido debe ser un objeto válido.');
+    }
+    if (typeof item.productoId !== 'number' || !Number.isInteger(item.productoId) || item.productoId <= 0) {
+      throw errorValidacion('El productoId debe ser un número entero positivo.');
+    }
+    if (
+      typeof item.cantidad !== 'number' ||
+      !Number.isInteger(item.cantidad) ||
+      item.cantidad < 1 ||
+      item.cantidad > MAX_CANTIDAD_ITEM
+    ) {
+      throw errorValidacion('La cantidad debe ser un número entero entre 1 y 100.');
+    }
+  }
+
+  return {
+    mesaLimpia: mesa.trim(),
+    clienteLimpio: cliente.trim(),
+  };
+}
 
 /**
  * Crea un pedido a partir de una lista de items { productoId, cantidad }.
  * Total = suma de calcularPrecio(producto) x cantidad
  */
-export async function crear({ mesa, cliente, items }: NuevoPedido): Promise<PedidoConItems | null> {
-  // FALLA: no se valida que items exista, sea un array, ni que cada cantidad
-  // sea un entero positivo. Los tipos de `NuevoPedido` NO alcanzan: el cuerpo
-  // de la petición llega como `any` y en ejecución puede traer cualquier cosa.
+export async function crear(datos: NuevoPedido): Promise<PedidoConItems | null> {
+  const { mesaLimpia, clienteLimpio } = validarPedido(datos);
   const filas: { productoId: number; cantidad: number; precioUnitario: number }[] = [];
 
-  for (const item of items) {
-    // Si el producto no existe, buscarProducto devuelve null y `precio`
-    // revienta con un TypeError cuyo stack se filtra al cliente.
+  for (const item of datos.items) {
     const producto = await buscarProducto(item.productoId);
+    if (!producto || !producto.activo) {
+      throw errorValidacion('El producto solicitado no existe.');
+    }
     const precioUnitario = calcularPrecio(producto);
     filas.push({
       productoId: producto.id,
@@ -67,7 +102,7 @@ export async function crear({ mesa, cliente, items }: NuevoPedido): Promise<Pedi
     `INSERT INTO pedidos (mesa, cliente, estado, total)
      VALUES ($1, $2, 'abierto', $3)
      RETURNING *`,
-    [mesa, cliente, total]
+    [mesaLimpia, clienteLimpio, total]
   );
   const pedido = rows[0];
 
@@ -83,19 +118,22 @@ export async function crear({ mesa, cliente, items }: NuevoPedido): Promise<Pedi
 }
 
 /** Busca un producto por id (helper interno). */
-async function buscarProducto(productoId: number): Promise<Producto> {
+async function buscarProducto(productoId: number): Promise<Producto | undefined> {
   const { rows } = await db.query<Producto>('SELECT * FROM productos WHERE id = $1', [productoId]);
   return rows[0];
 }
 
 /** Lista pedidos (con filtro opcional por mesa). */
 export async function listar(mesa?: string): Promise<Pedido[]> {
-  // FALLA: inyección SQL en el filtro de mesa.
-  let sql = 'SELECT * FROM pedidos';
-  if (mesa) sql += ` WHERE mesa = '${mesa}'`;
-  sql += ' ORDER BY id DESC';
+  if (mesa) {
+    const { rows } = await db.query<Pedido>(
+      'SELECT * FROM pedidos WHERE mesa = $1 ORDER BY id DESC',
+      [mesa]
+    );
+    return rows;
+  }
 
-  const { rows } = await db.query<Pedido>(sql);
+  const { rows } = await db.query<Pedido>('SELECT * FROM pedidos ORDER BY id DESC');
   return rows;
 }
 
