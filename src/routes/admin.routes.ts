@@ -31,6 +31,8 @@ const router = express.Router();
 router.use(requiereSesion);
 router.use(requiereRol('admin'));
 
+const ROLES_VALIDOS = ['admin', 'barista', 'mozo', 'cliente'] as const;
+
 /** GET /api/admin/usuarios */
 router.get('/usuarios', async (req, res, next) => {
   try {
@@ -50,6 +52,22 @@ router.get('/usuarios', async (req, res, next) => {
 router.put('/usuarios/:id', async (req, res, next) => {
   try {
     const { username, nombre, rol, password } = req.body || {};
+
+    for (const [campo, valor] of Object.entries({ username, nombre, rol, password })) {
+      if (valor !== undefined && typeof valor !== 'string') {
+        return res.status(400).json({ error: `El campo "${campo}" debe ser texto.` });
+      }
+    }
+
+    if (rol !== undefined) {
+      if (!(ROLES_VALIDOS as readonly string[]).includes(rol)) {
+        return res.status(400).json({ error: 'Rol inválido.' });
+      }
+      if (String(req.usuario!.id) === String(req.params.id)) {
+        return res.status(403).json({ error: 'No podés cambiar tu propio rol.' });
+      }
+    }
+
     const cambios: Partial<Usuario> = {};
     if (username !== undefined) cambios.username = username;
     if (nombre !== undefined) cambios.nombre = nombre;
