@@ -1,7 +1,8 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
+import crypto from 'crypto';
+import { spawn } from 'child_process';
 
 import config from '../config';
 import * as catalogo from '../services/catalogo.service';
@@ -29,6 +30,9 @@ const router = express.Router();
  * -----------------------------------------------------------------------------
  */
 router.use(requiereSesion);
+router.use(requiereRol('admin'));
+
+const ROLES_VALIDOS = ['admin', 'barista', 'mozo', 'cliente'] as const;
 
 /** GET /api/admin/usuarios */
 router.get('/usuarios', async (req, res, next) => {
@@ -49,6 +53,22 @@ router.get('/usuarios', async (req, res, next) => {
 router.put('/usuarios/:id', async (req, res, next) => {
   try {
     const { username, nombre, rol, password } = req.body || {};
+
+    for (const [campo, valor] of Object.entries({ username, nombre, rol, password })) {
+      if (valor !== undefined && typeof valor !== 'string') {
+        return res.status(400).json({ error: `El campo "${campo}" debe ser texto.` });
+      }
+    }
+
+    if (rol !== undefined) {
+      if (!(ROLES_VALIDOS as readonly string[]).includes(rol)) {
+        return res.status(400).json({ error: 'Rol inválido.' });
+      }
+      if (String(req.usuario!.id) === String(req.params.id)) {
+        return res.status(403).json({ error: 'No podés cambiar tu propio rol.' });
+      }
+    }
+
     const cambios: Partial<Usuario> = {};
     if (username !== undefined) cambios.username = username;
     if (nombre !== undefined) cambios.nombre = nombre;
@@ -131,6 +151,13 @@ router.post('/cambiar-contrasena', async (req, res, next) => {
   }
 });
 
+const HOSTS_PERMITIDOS = (process.env.HOSTS_PROVEEDORES ?? 'localhost,127.0.0.1')
+  .split(',')
+  .map((h) => h.trim())
+  .filter(Boolean);
+
+const REGEX_HOST = /^[a-zA-Z0-9]([a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$/;
+
 /**
  * POST /api/admin/probar-conexion
  *
@@ -150,16 +177,40 @@ router.post('/probar-conexion', (req, res) => {
   const { host } = req.body || {};
 
   // FALLA: entrada de usuario concatenada en un comando de shell.
-  const comando = `ping -c 3 ${host}`;
+  if (typeof host !== 'string' || !REGEX_HOST.test(host)) {
+    return res.status(400).json({ error: 'Host inválido.' });
+  }
+  if (!HOSTS_PERMITIDOS.includes(host)) {
+    return res.status(403).json({ error: 'Host no permitido.' });
+  }
 
-  exec(comando, (error, stdout, stderr) => {
+  const args = ['-c', '3', '--', host];
+  const proceso = spawn('ping', args, { shell: false, timeout: 10_000 });
+
+  let salida = '';
+  let errorSalida = '';
+  proceso.stdout.on('data', (d) => (salida += d.toString()));
+  proceso.stderr.on('data', (d) => (errorSalida += d.toString()));
+
+  proceso.on('error', () => {
+    if (!res.headersSent) res.status(500).json({ error: 'No se pudo ejecutar la prueba.' });
+  });
+  proceso.on('close', (codigo) => {
+    if (res.headersSent) return;
     res.json({
-      comando,
-      salida: stdout,
-      error: stderr || (error ? error.message : null),
+      comando: `ping ${args.join(' ')}`,
+      salida,
+      error: codigo === 0 ? null : errorSalida || `ping terminó con código ${codigo}`,
     });
   });
 });
+
+const MAX_BYTES = 2 * 1024 * 1024;
+const FIRMAS: Record<string, (b: Buffer) => boolean> = {
+  '.png': (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  '.jpg': (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  '.jpeg': (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+};
 
 /**
  * POST /api/admin/subir-archivo
@@ -177,25 +228,43 @@ router.post('/probar-conexion', (req, res) => {
  * y guardar fuera del árbol web.
  * -----------------------------------------------------------------------------
  */
-router.post('/subir-archivo', express.json({ limit: '8mb' }), (req, res, next) => {
+router.post('/subir-archivo', express.json({ limit: '3mb' }), (req, res, next) => {
   try {
     const { nombre, contenidoBase64 } = req.body || {};
 
-    if (!nombre || !contenidoBase64) {
+    if (typeof nombre !== 'string' || typeof contenidoBase64 !== 'string' || !nombre || !contenidoBase64) {
       return res.status(400).json({ error: 'Falta el archivo.' });
+    }
+
+    const ext = path.extname(nombre).toLowerCase();
+    const verificar = FIRMAS[ext];
+    if (!verificar) {
+      return res.status(400).json({ error: 'Tipo de archivo no permitido (solo png, jpg, jpeg).' });
     }
 
     // FALLA: sin validación de extensión, MIME ni tamaño.
     const buffer = Buffer.from(contenidoBase64, 'base64');
-    fs.mkdirSync(config.uploadsDir, { recursive: true });
+    if (buffer.length === 0 || buffer.length > MAX_BYTES) {
+      return res.status(413).json({ error: 'El archivo está vacío o supera los 2 MB.' });
+    }
+    if (!verificar(buffer)) {
+      return res.status(400).json({ error: 'El contenido no coincide con la extensión.' });
+    }
+
+    const nombreSeguro = `${crypto.randomUUID()}${ext}`;
+    const carpeta = path.resolve(config.uploadsDir);
+    fs.mkdirSync(carpeta, { recursive: true });
 
     // FALLA: nombre tomado del cliente sin sanear (path traversal).
-    const destino = path.join(config.uploadsDir, nombre);
-    fs.writeFileSync(destino, buffer);
+    const destino = path.resolve(carpeta, nombreSeguro);
+    if (path.dirname(destino) !== carpeta) {
+      return res.status(400).json({ error: 'Ruta de destino inválida.' });
+    }
+    fs.writeFileSync(destino, buffer, { flag: 'wx' });
 
     res.json({
       mensaje: 'Archivo subido.',
-      url: `/uploads/${nombre}`,
+      url: `/uploads/${nombreSeguro}`,
       bytes: buffer.length,
     });
   } catch (err) {
