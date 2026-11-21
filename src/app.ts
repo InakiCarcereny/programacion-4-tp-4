@@ -2,6 +2,7 @@ import express from "express";
 import helmet from "helmet";
 import path from "path";
 import config from "./config";
+import { emitirTokenCsrf, verificarCsrf } from "./middleware/csrf";
 import { manejadorErrores, rutaNoEncontrada } from "./middleware/errores";
 import adminRoutes from "./routes/admin.routes";
 import authRoutes from "./routes/auth.routes";
@@ -43,6 +44,9 @@ app.get("/api/salud", (req, res) => {
     hora: new Date().toISOString(),
   });
 });
+
+app.get("/api/csrf-token", emitirTokenCsrf);
+app.use("/api", verificarCsrf);
 
 app.use("/api/auth", authRoutes);
 app.use("/api/productos", productosRoutes);
