@@ -25,9 +25,9 @@
 import type { Request, Response } from 'express';
 
 import type { Sesion, UsuarioSesion } from '../tipos';
+import crypto from 'crypto';          
 
 export const sesiones = new Map<string, Sesion>();
-let contadorSesiones = 0;
 
 /** Lee las cookies de la petición (parser mínimo, sin dependencias). */
 export function leerCookies(req: Request): Record<string, string> {
@@ -44,33 +44,45 @@ export function leerCookies(req: Request): Record<string, string> {
   return cookies;
 }
 
+const TTL_SESION_MS = 30 * 60 * 1000;
+
+
 /** Crea una sesión nueva para el usuario y setea la cookie. */
 export function crearSesion(req: Request, res: Response, usuario: UsuarioSesion): string {
-  contadorSesiones += 1;
-
-  // FALLA: identificador predecible.
-  const id = `sesion_${contadorSesiones}`;
+  const id = crypto.randomUUID();
 
   // FALLA: la sesión nunca expira.
+  const ahora = Date.now();
   sesiones.set(id, {
     usuario,
-    creadaEn: Date.now(),
-    expiraEn: null,
+    creadaEn: ahora,
+    expiraEn: ahora + TTL_SESION_MS,   
   });
 
-  // FALLA: cookie sin httpOnly / secure / sameSite.
-  res.cookie('sid', id, { path: '/' });
+    res.cookie('sid', id, {
+    path: '/',
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: TTL_SESION_MS,
+  });
 
   return id;
 }
 
-/** Devuelve la sesión de la petición, si existe. */
 export function obtenerSesion(req: Request): Sesion | null {
   const cookies = leerCookies(req);
   const id = cookies.sid;
   if (!id) return null;
-  return sesiones.get(id) || null;
+  const sesion = sesiones.get(id);
+  if (!sesion) return null;
+  if (sesion.expiraEn !== null && sesion.expiraEn < Date.now()) {
+    sesiones.delete(id);   
+    return null;
+  }
+  return sesion;
 }
+
 
 /** Cierra la sesión en el servidor (debería llamarse en el logout). */
 export function destruirSesion(req: Request): void {

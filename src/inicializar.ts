@@ -1,6 +1,7 @@
 import * as db from './db';
 import { CATALOGO } from './catalogo';
 import type { Rol } from './tipos';
+import bcrypt from 'bcryptjs';
 
 interface UsuarioInicial {
   username: string;
@@ -54,13 +55,15 @@ export const USUARIOS_INICIALES: UsuarioInicial[] = [
 export async function inicializarBase(): Promise<void> {
   // --- Usuarios -------------------------------------------------------------
   for (const usuario of USUARIOS_INICIALES) {
-    // FALLA: la contraseña se guarda tal cual, sin hash ni salt.
-    await db.query(
-      `INSERT INTO usuarios (username, password, rol, nombre)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (username) DO NOTHING`,
-      [usuario.username, usuario.password, usuario.rol, usuario.nombre]
-    );
+    const hash = await bcrypt.hash(usuario.password, 12);
+  await db.query(
+    `INSERT INTO usuarios (username, password, rol, nombre)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (username) DO UPDATE
+       SET password = EXCLUDED.password
+     WHERE usuarios.password NOT LIKE '$2%'`,
+    [usuario.username, hash, usuario.rol, usuario.nombre]
+  );
   }
 
   // --- Catálogo -------------------------------------------------------------
