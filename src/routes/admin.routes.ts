@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { spawn } from 'child_process';
 
 import config from '../config';
@@ -204,6 +205,13 @@ router.post('/probar-conexion', (req, res) => {
   });
 });
 
+const MAX_BYTES = 2 * 1024 * 1024;
+const FIRMAS: Record<string, (b: Buffer) => boolean> = {
+  '.png': (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  '.jpg': (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  '.jpeg': (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+};
+
 /**
  * POST /api/admin/subir-archivo
  *
@@ -220,25 +228,43 @@ router.post('/probar-conexion', (req, res) => {
  * y guardar fuera del árbol web.
  * -----------------------------------------------------------------------------
  */
-router.post('/subir-archivo', express.json({ limit: '8mb' }), (req, res, next) => {
+router.post('/subir-archivo', express.json({ limit: '3mb' }), (req, res, next) => {
   try {
     const { nombre, contenidoBase64 } = req.body || {};
 
-    if (!nombre || !contenidoBase64) {
+    if (typeof nombre !== 'string' || typeof contenidoBase64 !== 'string' || !nombre || !contenidoBase64) {
       return res.status(400).json({ error: 'Falta el archivo.' });
+    }
+
+    const ext = path.extname(nombre).toLowerCase();
+    const verificar = FIRMAS[ext];
+    if (!verificar) {
+      return res.status(400).json({ error: 'Tipo de archivo no permitido (solo png, jpg, jpeg).' });
     }
 
     // FALLA: sin validación de extensión, MIME ni tamaño.
     const buffer = Buffer.from(contenidoBase64, 'base64');
-    fs.mkdirSync(config.uploadsDir, { recursive: true });
+    if (buffer.length === 0 || buffer.length > MAX_BYTES) {
+      return res.status(413).json({ error: 'El archivo está vacío o supera los 2 MB.' });
+    }
+    if (!verificar(buffer)) {
+      return res.status(400).json({ error: 'El contenido no coincide con la extensión.' });
+    }
+
+    const nombreSeguro = `${crypto.randomUUID()}${ext}`;
+    const carpeta = path.resolve(config.uploadsDir);
+    fs.mkdirSync(carpeta, { recursive: true });
 
     // FALLA: nombre tomado del cliente sin sanear (path traversal).
-    const destino = path.join(config.uploadsDir, nombre);
-    fs.writeFileSync(destino, buffer);
+    const destino = path.resolve(carpeta, nombreSeguro);
+    if (path.dirname(destino) !== carpeta) {
+      return res.status(400).json({ error: 'Ruta de destino inválida.' });
+    }
+    fs.writeFileSync(destino, buffer, { flag: 'wx' });
 
     res.json({
       mensaje: 'Archivo subido.',
-      url: `/uploads/${nombre}`,
+      url: `/uploads/${nombreSeguro}`,
       bytes: buffer.length,
     });
   } catch (err) {
