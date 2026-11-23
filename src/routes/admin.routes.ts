@@ -52,19 +52,27 @@ router.get('/usuarios', async (req, res, next) => {
  */
 router.put('/usuarios/:id', async (req, res, next) => {
   try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: 'Identificador inválido.' });
+    }
+
     const { username, nombre, rol, password } = req.body || {};
 
-    for (const [campo, valor] of Object.entries({ username, nombre, rol, password })) {
+    for (const valor of Object.values({ username, nombre, rol, password })) {
       if (valor !== undefined && typeof valor !== 'string') {
-        return res.status(400).json({ error: `El campo "${campo}" debe ser texto.` });
+        return res.status(400).json({ error: 'Los campos enviados deben ser de tipo texto.' });
       }
     }
 
     if (rol !== undefined) {
+      if (!req.usuario || req.usuario.rol !== 'admin') {
+        return res.status(403).json({ error: 'Solo un administrador puede cambiar roles.' });
+      }
       if (!(ROLES_VALIDOS as readonly string[]).includes(rol)) {
         return res.status(400).json({ error: 'Rol inválido.' });
       }
-      if (String(req.usuario!.id) === String(req.params.id)) {
+      if (req.usuario.id === id) {
         return res.status(403).json({ error: 'No podés cambiar tu propio rol.' });
       }
     }
@@ -75,7 +83,7 @@ router.put('/usuarios/:id', async (req, res, next) => {
     if (rol !== undefined) cambios.rol = rol;
     if (password !== undefined) cambios.password = password;
 
-    const usuario = await usuarios.actualizar(req.params.id, cambios);
+    const usuario = await usuarios.actualizar(id, cambios);
     if (!usuario) {
       return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
@@ -102,7 +110,12 @@ router.post('/productos', async (req, res, next) => {
 /** PUT /api/admin/productos/:id */
 router.put('/productos/:id', async (req, res, next) => {
   try {
-    const producto = await catalogo.actualizar(req.params.id, req.body || {});
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: 'Identificador inválido.' });
+    }
+
+    const producto = await catalogo.actualizar(id, req.body || {});
     if (!producto) {
       return res.status(404).json({ error: 'Producto no encontrado.' });
     }
@@ -120,7 +133,12 @@ router.put('/productos/:id', async (req, res, next) => {
  */
 router.delete('/productos/:id', async (req, res, next) => {
   try {
-    const producto = await catalogo.eliminar(req.params.id);
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: 'Identificador inválido.' });
+    }
+
+    const producto = await catalogo.eliminar(id);
     if (!producto) {
       return res.status(404).json({ error: 'Producto no encontrado.' });
     }

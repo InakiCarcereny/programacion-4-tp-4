@@ -37,22 +37,31 @@ const ROLES_VALIDOS = ['admin', 'barista', 'mozo', 'cliente'] as const;
 
 router.put('/usuarios/:id', async (req, res, next) => {
   try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: 'Identificador inválido.' });
+    }
+
     const { username, nombre, rol, password } = req.body || {};
 
-    // cada campo debe ser texto
-    for (const [campo, valor] of Object.entries({ username, nombre, rol, password })) {
+    // cada campo debe ser texto (mensaje genérico sin reflejar entrada)
+    for (const valor of Object.values({ username, nombre, rol, password })) {
       if (valor !== undefined && typeof valor !== 'string') {
-        return res.status(400).json({ error: `El campo "${campo}" debe ser texto.` });
+        return res.status(400).json({ error: 'Los campos enviados deben ser de tipo texto.' });
       }
     }
 
     if (rol !== undefined) {
+      // solo un administrador puede modificar el rol
+      if (!req.usuario || req.usuario.rol !== 'admin') {
+        return res.status(403).json({ error: 'Solo un administrador puede cambiar roles.' });
+      }
       // el rol tiene que ser uno de los que existen
       if (!(ROLES_VALIDOS as readonly string[]).includes(rol)) {
         return res.status(400).json({ error: 'Rol inválido.' });
       }
       // un admin no puede cambiarse su propio rol
-      if (String(req.usuario!.id) === String(req.params.id)) {
+      if (req.usuario.id === id) {
         return res.status(403).json({ error: 'No podés cambiar tu propio rol.' });
       }
     }
