@@ -11,11 +11,19 @@ en vez de quedar limitada a las tablas del schema `public` (principio de mínimo
 privilegios).
 
 **Dónde está**
-`docker-compose.yml`:
-- línea 25: `POSTGRES_PASSWORD: postgres` (contraseña trivial),
-     - línea 29: `POSTGRES_HOST_AUTH_METHOD: trust` (sin contraseña),
-- líneas 60–61: `DB_USER: postgres` y `DB_PASSWORD: postgres` (la app usa el
-  superusuario).
+- `docker-compose.yml`:
+  - línea 25: `POSTGRES_PASSWORD: postgres` (contraseña trivial),
+  - línea 29: `POSTGRES_HOST_AUTH_METHOD: trust` (sin contraseña),
+  - líneas 60–61: `DB_USER: postgres` y `DB_PASSWORD: postgres` (la app usa el
+    superusuario).
+- `src/config.ts`:
+  - líneas 27–28: `user: process.env.DB_USER || 'postgres'` y
+    `password: process.env.DB_PASSWORD || 'postgres'`,
+  - línea 33: `sessionSecret` fijo en el código y `credencialesPorDefecto`
+    con `password: 'admin'`.
+- `Dockerfile`:
+  - sin directiva `USER`, por lo que el contenedor de la aplicación corría
+    como `root`.
 
 **Cómo se observa**
 1. Con el proyecto levantado, conectarse a la base **por red** (TCP) sin dar
@@ -57,13 +65,36 @@ DB_USER: origen_app
 DB_PASSWORD: origen_app_2024
 ```
 
+```ts
+// src/config.ts
+  db: {
+    host: process.env.DB_HOST || 'db',
+    port: Number(process.env.DB_PORT || 5432),
+    database: process.env.DB_NAME || 'origen',
+    user: process.env.DB_USER || 'origen_app',
+    password: process.env.DB_PASSWORD || 'origen_app_2024',
+  },
+  sessionSecret: process.env.SESSION_SECRET || 'origen-cafe-2024',
+```
+
+```dockerfile
+# Dockerfile
+RUN mkdir -p /app/uploads && chown -R node:node /app
+USER node
+```
+
 - Se elimina `POSTGRES_HOST_AUTH_METHOD: trust`; PostgreSQL 16 usa
   `scram-sha-256` por defecto.
 - La contraseña del superusuario deja de ser `postgres`.
-- La aplicación usa el usuario `origen_app`, que no es superusuario y tiene
-  permisos sobre las tablas del schema `public` (definido en
-  `docker/initdb/02-usuario-aplicacion.sql`). El superusuario `postgres`
-  queda solo para administración.
+- La aplicación usa el usuario `origen_app` (tanto en `docker-compose.yml` como
+  en `src/config.ts`), que no es superusuario y tiene permisos sobre las tablas
+  del schema `public` (definido en `docker/initdb/02-usuario-aplicacion.sql`).
+  El superusuario `postgres` queda solo para administración.
+- En `src/config.ts` se leen `SESSION_SECRET`, `DB_USER` y `DB_PASSWORD` desde
+  `process.env` y se quita el bloque de credenciales por defecto con
+  `password: 'admin'`.
+- En `Dockerfile` el contenedor pasa a ejecutarse con el usuario sin
+  privilegios `node` (`USER node`).
 - La base no publica ningún puerto en el host: solo es accesible desde la red
   interna `red_origen`.
 
@@ -77,7 +108,7 @@ docker compose up -d --build
 
 **Cómo se verifica que quedó resuelto**
 - `docker compose exec app npm run check:security` → controles `SQLI-03`,
-  `SQLI-04` y `SQLI-05` en verde.
+  `SQLI-04`, `SQLI-05`, `CFG-02` y `CFG-05` en verde.
 - `docker compose exec app npm test` → sigue en verde (la app conecta con
   `origen_app`).
 - Manual: repetir `psql -h 127.0.0.1 -U postgres ...` y confirmar que ahora
