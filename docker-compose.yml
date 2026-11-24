@@ -58,6 +58,11 @@ services:
       # docker/initdb/02-usuario-aplicacion.sql).
       DB_USER: origen_app
       DB_PASSWORD: origen_app_2024
+      # Credenciales de las cuentas de ejemplo (sólo para este entorno de
+      # desarrollo/práctica). En código fuente no queda ningún valor
+      # trivial hardcodeado — ver src/inicializar.ts.
+      SEED_ADMIN_PASSWORD: admin
+      SEED_CLIENTE_PASSWORD: cliente
       UPLOADS_DIR: /app/uploads
       # Puerto publicado en el host, sólo para los mensajes de arranque.
       APP_PORT: "${APP_PORT:-8080}"

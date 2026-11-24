@@ -1,7 +1,8 @@
-import * as db from './db';
-import { CATALOGO } from './catalogo';
-import type { Rol } from './tipos';
-import bcrypt from 'bcryptjs';
+import crypto from "node:crypto";
+import bcrypt from "bcryptjs";
+import { CATALOGO } from "./catalogo";
+import * as db from "./db";
+import type { Rol } from "./tipos";
 
 interface UsuarioInicial {
   username: string;
@@ -10,63 +11,67 @@ interface UsuarioInicial {
   nombre: string;
 }
 
-/**
- * Carga los datos iniciales (usuarios y catálogo) si la base está vacía.
- *
- * FALLA — Almacenamiento inseguro de credenciales:
- * las contraseñas de los usuarios se guardan en TEXTO PLANO.
- * La corrección es hashear con bcrypt + salt por usuario
- * (bcryptjs ya está instalado como dependencia del proyecto).
- */
+function passwordPorDefecto(
+  variableEntorno: string,
+  usuarioDemo: string,
+): string {
+  const desdeEntorno = process.env[variableEntorno];
+  if (desdeEntorno) return desdeEntorno;
+
+  const generada = crypto.randomBytes(9).toString("base64url");
+  console.warn(
+    `[inicializar] ${variableEntorno} no está definida: se generó una contraseña aleatoria ` +
+      `para "${usuarioDemo}" (definila en el entorno para fijarla): ${generada}`,
+  );
+  return generada;
+}
 
 export const USUARIOS_INICIALES: UsuarioInicial[] = [
   {
-    username: 'admin',
-    password: 'admin',
-    rol: 'admin',
-    nombre: 'Administración',
+    username: "admin",
+    password: passwordPorDefecto("SEED_ADMIN_PASSWORD", "admin"),
+    rol: "admin",
+    nombre: "Administración",
   },
   {
-    username: 'valentina',
-    password: 'origen2024',
-    rol: 'admin',
-    nombre: 'Valentina',
+    username: "valentina",
+    password: "origen2024",
+    rol: "admin",
+    nombre: "Valentina",
   },
   {
-    username: 'barista',
-    password: 'cafe123',
-    rol: 'barista',
-    nombre: 'Barista',
+    username: "barista",
+    password: "cafe123",
+    rol: "barista",
+    nombre: "Barista",
   },
   {
-    username: 'mozo',
-    password: 'mozo123',
-    rol: 'mozo',
-    nombre: 'Mozo de sala',
+    username: "mozo",
+    password: "mozo123",
+    rol: "mozo",
+    nombre: "Mozo de sala",
   },
   {
-    username: 'cliente',
-    password: 'cliente',
-    rol: 'cliente',
-    nombre: 'Cliente',
+    username: "cliente",
+    password: passwordPorDefecto("SEED_CLIENTE_PASSWORD", "cliente"),
+    rol: "cliente",
+    nombre: "Cliente",
   },
 ];
 
 export async function inicializarBase(): Promise<void> {
-  // --- Usuarios -------------------------------------------------------------
   for (const usuario of USUARIOS_INICIALES) {
     const hash = await bcrypt.hash(usuario.password, 12);
-  await db.query(
-    `INSERT INTO usuarios (username, password, rol, nombre)
+    await db.query(
+      `INSERT INTO usuarios (username, password, rol, nombre)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (username) DO UPDATE
        SET password = EXCLUDED.password
      WHERE usuarios.password NOT LIKE '$2%'`,
-    [usuario.username, hash, usuario.rol, usuario.nombre]
-  );
+      [usuario.username, hash, usuario.rol, usuario.nombre],
+    );
   }
 
-  // --- Catálogo -------------------------------------------------------------
   for (const producto of CATALOGO) {
     await db.query(
       `INSERT INTO productos
@@ -82,7 +87,7 @@ export async function inicializarBase(): Promise<void> {
         producto.precio_base,
         producto.precio_por_gramo,
         producto.descripcion,
-      ]
+      ],
     );
   }
 }
