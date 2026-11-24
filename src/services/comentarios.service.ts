@@ -1,58 +1,88 @@
-import * as db from '../db';
-import type { Comentario } from '../tipos';
+import * as db from "../db";
+import type { Comentario, ErrorHttp } from "../tipos";
 
-/** Datos de una reseña nueva, tal como llegan en el cuerpo de la petición. */
 export interface NuevoComentario {
   autor: string;
   texto: string;
   calificacion: number;
 }
 
-/**
- * Servicio de comentarios / reseñas de la cafetería.
- *
- * -----------------------------------------------------------------------------
- * FALLA — Validación de entrada débil (OWASP A04:2021)
- * -----------------------------------------------------------------------------
- * No se valida longitud, ni formato, ni que la calificación esté en rango.
- *
- * -----------------------------------------------------------------------------
- * FALLA — Cross-Site Scripting almacenado (OWASP A03:2021)
- * -----------------------------------------------------------------------------
- * El texto del comentario se guarda tal cual y luego se devuelve en las
- * respuestas JSON que la web inserta en el DOM. Como el cliente lo pinta con
- * innerHTML, el script queda almacenado en la base y se ejecuta en el
- * navegador de CADA visitante (incluidos los administradores).
- *
- * Corrección: escapar/sanear la salida en el cliente (textContent en vez de
- * innerHTML) o, mejor, sanitizar en el servidor y aplicar CSP como capa extra.
- */
+const MAX_LARGO_AUTOR = 80;
+const MAX_LARGO_TEXTO = 1000;
 
-/** Lista todos los comentarios, del más nuevo al más viejo. */
+function errorValidacion(mensaje: string): ErrorHttp {
+  const err: ErrorHttp = new Error(mensaje);
+  err.status = 400;
+  return err;
+}
+
+function validarComentario({
+  autor,
+  texto,
+  calificacion,
+}: NuevoComentario): NuevoComentario {
+  if (
+    typeof autor !== "string" ||
+    autor.trim().length === 0 ||
+    autor.trim().length > MAX_LARGO_AUTOR
+  ) {
+    throw errorValidacion(
+      `El autor es obligatorio y debe tener como máximo ${MAX_LARGO_AUTOR} caracteres.`,
+    );
+  }
+
+  if (
+    typeof texto !== "string" ||
+    texto.trim().length === 0 ||
+    texto.trim().length > MAX_LARGO_TEXTO
+  ) {
+    throw errorValidacion(
+      `El texto es obligatorio y debe tener como máximo ${MAX_LARGO_TEXTO} caracteres.`,
+    );
+  }
+
+  const calificacionNumerica = Number(calificacion);
+  if (
+    !Number.isInteger(calificacionNumerica) ||
+    calificacionNumerica < 1 ||
+    calificacionNumerica > 5
+  ) {
+    throw errorValidacion(
+      "La calificación debe ser un número entero entre 1 y 5.",
+    );
+  }
+
+  return {
+    autor: autor.trim(),
+    texto: texto.trim(),
+    calificacion: calificacionNumerica,
+  };
+}
+
 export async function listar(): Promise<Comentario[]> {
   const { rows } = await db.query<Comentario>(
-    'SELECT * FROM comentarios ORDER BY id DESC'
+    "SELECT * FROM comentarios ORDER BY id DESC",
   );
   return rows;
 }
 
-/** Crea un comentario. */
-export async function crear({ autor, texto, calificacion }: NuevoComentario): Promise<Comentario> {
-  // FALLA: sin validación de longitud ni de rango de calificación.
+export async function crear(datos: NuevoComentario): Promise<Comentario> {
+  const { autor, texto, calificacion } = validarComentario(datos);
   const { rows } = await db.query<Comentario>(
     `INSERT INTO comentarios (autor, texto, calificacion)
      VALUES ($1, $2, $3)
      RETURNING *`,
-    [autor, texto, calificacion]
+    [autor, texto, calificacion],
   );
   return rows[0];
 }
 
-/** Elimina un comentario. */
-export async function eliminar(id: number | string): Promise<Comentario | null> {
+export async function eliminar(
+  id: number | string,
+): Promise<Comentario | null> {
   const { rows } = await db.query<Comentario>(
-    'DELETE FROM comentarios WHERE id = $1 RETURNING *',
-    [id]
+    "DELETE FROM comentarios WHERE id = $1 RETURNING *",
+    [id],
   );
   return rows[0] || null;
 }
